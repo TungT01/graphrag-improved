@@ -1,0 +1,70 @@
+# ============================================================
+# GraphRAG Improved — 项目配置文件
+# ============================================================
+# 修改此文件后重新运行 main.py 即可生效，无需改动代码。
+
+# ------------------------------------------------------------
+# 数据输入
+# ------------------------------------------------------------
+input:
+  # 输入目录，支持 .txt / .json / .pdf（需安装 pypdf）
+  data_dir: "./sample_data"
+  # 文件编码
+  encoding: "utf-8"
+  # 分块策略：token（按 token 数）| sentence（按句子）| paragraph（按段落）
+  chunk_strategy: "paragraph"
+  # 每个 chunk 的最大 token 数（仅 chunk_strategy=token 时生效）
+  chunk_size: 512
+  # 相邻 chunk 的重叠 token 数
+  chunk_overlap: 64
+
+# ------------------------------------------------------------
+# 实体与关系抽取
+# ------------------------------------------------------------
+extraction:
+  # 抽取后端：spacy（本地轻量）| rule（纯规则，无需模型）
+  backend: "rule"
+  # spaCy 模型名称（backend=spacy 时生效）
+  spacy_model: "en_core_web_sm"
+  # 关系权重：共现窗口内的句子距离越近，权重越高
+  cooccurrence_window: 3
+  # 最小实体出现次数（低于此值的实体不进入图）
+  min_entity_freq: 1
+
+# ------------------------------------------------------------
+# 约束 Leiden 聚类
+# ------------------------------------------------------------
+clustering:
+  # 初始 λ 值（底层物理约束强度）
+  lambda_init: 1000.0
+  # 最小 λ 值（高层语义融合时的约束下限）
+  lambda_min: 0.0
+  # 退火曲线：exponential | linear | cosine | step
+  annealing_schedule: "exponential"
+  # 衰减速率
+  decay_rate: 0.5
+  # 预期最大层次数
+  max_level: 10
+  # 单个社区最大节点数
+  max_cluster_size: 10
+  # 每层最大迭代轮数
+  max_iterations: 10
+  # 随机种子
+  seed: 42
+  # 是否仅对最大连通分量聚类
+  use_lcc: true
+
+# ------------------------------------------------------------
+# 结果输出
+# ------------------------------------------------------------
+output:
+  # 输出目录
+  output_dir: "./output"
+  # 是否生成 HTML 可视化报告
+  html_report: true
+  # 是否导出 CSV 数据文件
+  csv_export: true
+  # 是否导出 communities.parquet（GraphRAG 兼容格式）
+  parquet_export: true
+  # 是否打印控制台摘要
+  console_summary: true

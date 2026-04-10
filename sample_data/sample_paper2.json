@@ -1,0 +1,10 @@
+[
+  {
+    "title": "GraphRAG Community Detection Survey",
+    "text": "Community detection in knowledge graphs is a fundamental problem in graph analysis. The Louvain algorithm and Leiden algorithm are two widely used methods for modularity-based community detection.\n\nThe Leiden algorithm guarantees that all communities are well-connected, which is a significant improvement over Louvain. The algorithm operates in three phases: local moving, refinement, and aggregation.\n\nIn the local moving phase, each node is moved to the community that maximizes the modularity gain. The refinement phase splits communities to avoid local optima. The aggregation phase compresses each community into a super-node for the next iteration.\n\nModularity Q is defined as the fraction of edges within communities minus the expected fraction if edges were distributed randomly. Higher modularity indicates better community structure."
+  },
+  {
+    "title": "Physical Anchoring in Scientific RAG",
+    "text": "Scientific literature presents unique challenges for information retrieval systems. Micro-level facts such as specific dosages, experimental conditions, and measurement values must be precisely attributed to their source documents.\n\nPhysical anchoring is a technique that assigns each extracted knowledge triple a source identifier. This identifier, called Chunk_ID, points to the original text segment from which the triple was extracted.\n\nThe Shannon entropy formula H = -sum(p_i * log(p_i)) can be used to measure the physical diversity of a community. When all nodes in a community originate from the same source chunk, the entropy is zero, indicating perfect physical purity.\n\nThe structural entropy constraint prevents the Leiden algorithm from merging nodes from different physical sources at the bottom level of the hierarchy. This preserves the physical context of micro-level facts during the clustering process."
+  }
+]

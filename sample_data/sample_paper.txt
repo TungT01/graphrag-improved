@@ -1,0 +1,45 @@
+Retrieval-Augmented Generation with Structural Entropy Constraints
+
+Abstract
+
+Large Language Models (LLMs) have demonstrated remarkable performance on knowledge-intensive tasks. However, LLMs suffer from hallucinations and outdated knowledge. Retrieval-Augmented Generation (RAG) addresses these limitations by integrating external knowledge bases into the generation process.
+
+GraphRAG, proposed by Microsoft, constructs entity knowledge graphs and applies the Leiden algorithm to generate hierarchical community summaries. This approach enables global reasoning across documents. However, traditional GraphRAG suffers from topological blindness, where physical context is lost during pure semantic clustering.
+
+Introduction
+
+The Leiden algorithm is a graph clustering method that improves upon the Louvain algorithm by guaranteeing community connectivity. Leiden uses modularity as its optimization objective. The modularity Q measures the density of edges within communities compared to edges between communities.
+
+In scientific domains such as biomedical research and drug discovery, precise attribution of micro-level facts is critical. For example, Drug X at 5mg dosage exhibits toxicity through Receptor Y inhibition. Such micro-level facts must be preserved with their physical source identifiers.
+
+Methodology
+
+Our proposed method introduces structural entropy as a penalty term in the Leiden objective function. The modified objective is J = Q_Leiden - lambda * H_structure, where H_structure is the Shannon entropy of the physical source distribution within a community.
+
+The lambda annealing mechanism controls the decay of the penalty coefficient across hierarchy levels. At the bottom level, lambda is set to a large value to enforce physical constraints. As the hierarchy level increases, lambda decays exponentially toward zero, releasing semantic fusion capability.
+
+Proposition Transfer is applied as a preprocessing step to resolve coreference and reconstruct independent propositions. For instance, the sentence containing a pronoun is rewritten to include the explicit subject entity.
+
+Physical Anchoring assigns each extracted triple a Chunk_ID that identifies its original source text unit. This enables 100% traceable evidence retrieval through the U-Retrieval mechanism.
+
+U-Retrieval combines top-down community navigation with bottom-up physical anchor retrieval. The top-down phase locks relevant semantic communities using the hierarchical index. The bottom-up phase retrieves original text chunks via Chunk_ID bindings.
+
+Experiments
+
+We evaluate our method on scientific QA benchmarks including BioASQ and SciQ. The baseline comparison includes standard GraphRAG and naive RAG with dense retrieval.
+
+The structural entropy metric measures community purity. A community with all nodes from the same physical source has entropy zero. A community with nodes uniformly distributed across k sources has maximum entropy log(k).
+
+Results show that our constrained Leiden method achieves lower average structural entropy at the bottom level compared to standard Leiden. This confirms that the physical constraint effectively prevents cross-document merging of micro-level facts.
+
+Conclusion
+
+We propose a novel GraphRAG variant that incorporates structural entropy constraints into the Leiden clustering objective. The lambda annealing mechanism enables a smooth transition from strict physical consistency at the bottom level to global semantic connectivity at higher levels.
+
+Future work includes evaluating the method on larger scientific corpora and investigating the relationship between physical boundary alignment and domain-specific document structure.
+
+References
+
+Edge et al. (2024). From Local to Global: A GraphRAG Approach to Query-Focused Summarization.
+Wu et al. (2024). Medical Graph RAG: Towards Safe Medical Large Language Model.
+Chen et al. (2024). Dense X Retrieval: What Retrieval Granularity Should We Use?
