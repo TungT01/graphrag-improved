@@ -1,6 +1,6 @@
 # GraphRAG Improved
 
-带**结构熵惩罚**的层次化 Leiden 聚类原型，对微软 [GraphRAG](https://github.com/microsoft/graphrag) 的社区检测模块进行改进。
+带**结构熵惩罚**的层次化 Leiden 聚类原型，对微软 [GraphRAG](https://github.com/microsoft/graphrag) 的社区检测、检索与评估模块进行全面改进。
 
 ## 核心思想
 
@@ -20,6 +20,8 @@ J = Q_leiden - λ · H_structure
 
 **λ 退火机制**：底层 λ 极大，强制保持物理边界（同一文档的实体优先聚在一起）；高层 λ 趋零，释放跨文档语义融合能力，实现层次化的粒度控制。
 
+在此基础上，本项目还新增了命题转换预处理、U-Retrieval 双轨检索和完整的评估框架，构成一个端到端的 GraphRAG 改进原型。
+
 ## 项目结构
 
 ```
@@ -32,17 +34,108 @@ graphrag_improved/
 ├── constrained_leiden/        # 核心算法
 │   ├── physical_anchor.py     # 物理锚点 & 结构熵计算
 │   ├── annealing.py           # λ 退火机制（4种曲线）
-│   ├── leiden_constrained.py  # 带结构熵惩罚的 Leiden 算法
+│   ├── leiden_constrained.py  # 带结构熵惩罚的 Leiden 算法（含细化阶段修复）
 │   ├── graphrag_workflow.py   # GraphRAG 兼容接口
 │   └── tests/test_core.py     # 核心算法单元测试（25个）
 │
+├── proposition/               # 命题转换预处理
+│   └── transformer.py         # 共指消解 + 命题原子化
+│
 ├── data/ingestion.py          # 文档加载 + 分块（txt/json/pdf）
-├── extraction/extractor.py    # 实体与关系抽取（rule/spacy）
-├── output/reporter.py         # 结果输出（CSV / HTML 报告）
+├── extraction/extractor.py    # 实体与关系抽取（含实体消歧）
+├── retrieval/retriever.py     # U-Retrieval 双轨检索
+├── evaluation/evaluator.py    # 评估框架（Precision@K / MRR / NDCG / ROUGE-L）
+├── output/reporter.py         # 结果输出（CSV / HTML 报告 + Force-directed 图）
 │
 ├── sample_data/               # 示例输入数据
+│   ├── sample_paper.txt
+│   ├── sample_paper2.json
+│   ├── sample_paper3.txt
+│   └── sample_qa.json         # 示例 QA 对（用于检索评估）
 └── tests/test_pipeline.py     # Pipeline 集成测试（24个）
 ```
+
+## 新增模块说明
+
+### 命题转换（`proposition/transformer.py`）
+
+将原始文本块转换为原子命题，提升实体抽取和检索的精度。
+
+**共指消解**：将代词和指代表达替换为其所指实体，使每个命题在脱离上下文后仍能独立理解。默认使用基于规则的轻量实现，可选升级到 spaCy + neuralcoref。
+
+**命题原子化**：将复合句拆解为多个原子命题，每个命题只表达一个独立事实。支持并列连词分割、从句提取和括号内容独立化。
+
+```python
+from graphrag_improved.proposition.transformer import PropositionTransformer
+
+transformer = PropositionTransformer(coref_backend="rule", atomize_backend="rule")
+propositions = transformer.transform(text, chunk_id="doc1_chunk0")
+# 返回 List[Proposition]，每个命题保留原始 chunk_id 作为物理锚点
+
+# 批量处理并转回 TextUnit 格式
+text_units = transformer.propositions_to_text_units(propositions)
+```
+
+### 实体消歧（`extraction/extractor.py`）
+
+在原有规则/spaCy 双后端抽取的基础上，新增实体消歧步骤：将写法不同但指向同一实体的名称（如 `Graph RAG` 与 `GraphRAG`）自动合并，保留出现频率最高的写法作为规范名，并合并所有别名的 `chunk_ids`。
+
+### U-Retrieval 双轨检索（`retrieval/retriever.py`）
+
+实现论文中提出的 U-Retrieval 架构，结合两条互补的检索路径：
+
+**自顶向下（Top-Down）**：从最高层社区出发，逐层向下导航，找到与查询最相关的社区，获取社区摘要作为全局上下文。
+
+**自底向上（Bottom-Up）**：通过实体的物理锚点（`chunk_id`）直接定位原始文本块，提供精确的局部上下文。命中物理锚点的文本块额外获得 1.5× 权重加成。
+
+两条路径的结果按可配置的 `alpha` 比例融合，提供兼顾全局语义和局部精确性的上下文，供下游 LLM 生成最终答案。默认使用 TF-IDF 相似度，可选升级到 BM25（`pip install rank-bm25`）。
+
+```python
+from graphrag_improved.retrieval.retriever import URetriever
+
+retriever = URetriever.from_pipeline_result(
+    pipeline_result, text_units,
+    top_k_communities=5, top_k_chunks=5,
+)
+result = retriever.retrieve("What is the Leiden algorithm?")
+print(result.merged_context)   # 融合后的上下文，直接传给 LLM
+```
+
+### 评估框架（`evaluation/evaluator.py`）
+
+提供三类无需外部依赖的评估能力：
+
+**社区质量评估**：模块度 Q、平均结构熵、Level 0 物理纯净率（熵 < 阈值的社区比例）、社区大小分布均匀性，以及各层结构熵的逐层统计。
+
+**检索质量评估**：基于 QA 对和相关 `chunk_id` 标注，计算 Precision@K、Recall@K、F1@K（K 默认为 1/3/5/10）、MRR 和 NDCG@K。
+
+**文本匹配评估**：用于 QA 生成质量评估，计算 Exact Match、Token-level F1 和 ROUGE-L（基于动态规划 LCS）。
+
+```python
+from graphrag_improved.evaluation.evaluator import Evaluator, load_qa_pairs_from_csv
+
+evaluator = Evaluator()
+
+# 社区质量（无需标注）
+comm_metrics = evaluator.evaluate_community_quality(communities_df, relationships_df)
+print(comm_metrics.summary())
+
+# 检索质量（需要 QA 对）
+qa_pairs = load_qa_pairs_from_csv("sample_data/sample_qa.json")
+ret_metrics = evaluator.evaluate_retrieval(qa_pairs, retriever)
+print(ret_metrics.summary())
+
+# 一键生成完整报告
+report = evaluator.full_report(communities_df, relationships_df, qa_pairs, retriever)
+```
+
+### HTML 报告增强（`output/reporter.py`）
+
+在原有结构熵分布折线图的基础上，新增基于 Canvas 的 **Force-directed 知识图谱可视化**：节点颜色代表所属社区（Level 0 着色），边粗细代表共现权重，支持鼠标拖拽交互。图谱最多展示 80 个节点，自动过滤孤立边，120 帧物理模拟后静止。
+
+### Leiden 细化阶段修复（`constrained_leiden/leiden_constrained.py`）
+
+修复了原版 Leiden 算法细化（refinement）阶段在处理小图时可能出现的边界条件错误，确保在节点数极少（< 3）或社区只有单节点时算法仍能正确收敛，不抛出异常。
 
 ## 快速开始
 
@@ -50,10 +143,16 @@ graphrag_improved/
 
 ```bash
 pip install networkx pandas pyyaml
+
 # 可选：PDF 支持
 pip install pypdf
-# 可选：spaCy 后端
+
+# 可选：spaCy 后端（实体抽取 / 共指消解）
 pip install spacy && python -m spacy download en_core_web_sm
+
+# 可选：BM25 检索后端
+pip install rank-bm25
+
 # 可选：Parquet 导出
 pip install pyarrow
 ```
@@ -67,11 +166,41 @@ python -m graphrag_improved.main
 # 指定自己的数据目录
 python -m graphrag_improved.main --data-dir ./my_papers
 
-# 调整物理约束强度
+# 调整物理约束强度和退火曲线
 python -m graphrag_improved.main --lambda-init 500 --schedule cosine
 
 # 仅执行数据摄入和抽取（调试模式）
 python -m graphrag_improved.main --dry-run
+```
+
+### 使用 U-Retrieval 检索
+
+```python
+from graphrag_improved.run import run_pipeline
+from graphrag_improved.pipeline_config import PipelineConfig
+from graphrag_improved.retrieval.retriever import URetriever
+
+config = PipelineConfig.from_yaml("config.yaml")
+result, text_units = run_pipeline(config)
+
+retriever = URetriever.from_pipeline_result(result, text_units)
+ret_result = retriever.retrieve(
+    "What is structural entropy?",
+    entity_mentions=["Leiden", "GraphRAG"],
+    alpha=0.5,   # 0.5 = 社区上下文与原文片段各占一半
+)
+print(ret_result.merged_context)
+```
+
+### 使用命题转换预处理
+
+```python
+from graphrag_improved.proposition.transformer import PropositionTransformer
+
+transformer = PropositionTransformer()
+# 将文本块列表转换为原子命题，再送入抽取模块
+prop_units = transformer.transform_batch(text_units)
+text_units_for_extraction = transformer.propositions_to_text_units(prop_units)
 ```
 
 ### 输出文件
@@ -80,9 +209,9 @@ python -m graphrag_improved.main --dry-run
 
 | 文件 | 说明 |
 |------|------|
-| `report.html` | 可视化报告，含结构熵分布图 |
+| `report.html` | 可视化报告，含结构熵分布图 + Force-directed 知识图谱 |
 | `communities.csv` | 社区详情（含结构熵、λ 值） |
-| `entities.csv` | 实体列表 |
+| `entities.csv` | 实体列表（含消歧后的规范名） |
 | `relationships.csv` | 关系列表 |
 | `summary.txt` | 控制台摘要文本 |
 
@@ -97,17 +226,27 @@ clustering:
   annealing_schedule: "exponential"  # exponential | linear | cosine | step
   decay_rate: 0.5
   max_cluster_size: 10
+
+extraction:
+  backend: "rule"            # rule | spacy
+  min_entity_freq: 1
+  cooccurrence_window: 3
+
+retrieval:
+  top_k_communities: 5
+  top_k_chunks: 5
+  max_context_chars: 4000
 ```
 
 ## 测试
 
 ```bash
-# 运行全部测试（49个）
+# 运行全部测试（48 passed, 1 skipped）
 python -m pytest graphrag_improved/constrained_leiden/tests/test_core.py \
                  graphrag_improved/tests/test_pipeline.py -v
 ```
 
-测试覆盖：结构熵计算、退火机制、物理约束效果、层次输出、配置加载、数据摄入、实体抽取、端到端 Pipeline、输出文件完整性。
+测试覆盖：结构熵计算、退火机制、物理约束效果、层次输出、Leiden 细化阶段边界条件、配置加载、数据摄入、实体抽取与消歧、命题转换、U-Retrieval 双轨检索、评估框架（Precision@K / MRR / NDCG / ROUGE-L）、端到端 Pipeline、输出文件完整性。
 
 ## 实验结果（示例数据）
 
@@ -131,10 +270,11 @@ communities_df = run_constrained_community_detection(entities_df, relationships_
 
 ## 局限性与后续方向
 
-- 命题转换（复合句拆解为原子命题）尚未实现
-- spaCy 指代消解预处理尚未集成
+- 命题转换目前使用规则后端，精度有限；接入 LLM 后端可显著提升原子化质量
+- 共指消解规则策略仅处理简单代词，复杂指代链需要 neuralcoref / fastcoref
 - 需要在真实科研文献数据上做对照实验，验证检索质量提升效果
 - 物理边界有效性依赖分块策略，段落分块效果最佳
+- U-Retrieval 当前使用 TF-IDF，接入向量检索（FAISS / Chroma）可进一步提升召回率
 
 ## License
 
