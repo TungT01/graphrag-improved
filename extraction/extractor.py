@@ -77,6 +77,76 @@ _STOPWORDS = {
     "et", "al", "fig", "eq", "ref",
 }
 
+# ---------------------------------------------------------------------------
+# 实体消歧（Entity Disambiguation）
+# ---------------------------------------------------------------------------
+
+def _normalize_entity_title(title: str) -> str:
+    """
+    标准化实体名称，用于消歧。
+    例如："Graph RAG" 和 "GraphRAG" 应被视为同一实体。
+    """
+    # 去除空格、连字符，统一小写
+    return re.sub(r"[\s\-_]+", "", title).lower()
+
+
+def _disambiguate_entities(
+    entities: Dict[str, "Entity"],
+) -> Dict[str, "Entity"]:
+    """
+    实体消歧：将写法不同但指向同一实体的名称合并。
+
+    策略：
+    1. 标准化所有实体名称（去空格、小写）
+    2. 将标准化后相同的实体合并，保留出现频率最高的写法作为规范名
+    3. 合并 chunk_ids（取并集）
+
+    Parameters
+    ----------
+    entities : Dict[str, Entity]
+        原始实体字典
+
+    Returns
+    -------
+    Dict[str, Entity]
+        消歧后的实体字典
+    """
+    # 按标准化名称分组
+    groups: Dict[str, List[str]] = defaultdict(list)
+    for title in entities:
+        norm = _normalize_entity_title(title)
+        groups[norm].append(title)
+
+    merged: Dict[str, "Entity"] = {}
+    for norm, titles in groups.items():
+        if len(titles) == 1:
+            merged[titles[0]] = entities[titles[0]]
+            continue
+
+        # 选出现 chunk 数最多的写法作为规范名
+        canonical = max(titles, key=lambda t: len(entities[t].chunk_ids))
+        canonical_entity = entities[canonical]
+
+        # 合并所有写法的 chunk_ids
+        all_chunks: Set[str] = set(canonical_entity.chunk_ids)
+        for title in titles:
+            if title != canonical:
+                all_chunks.update(entities[title].chunk_ids)
+
+        merged[canonical] = Entity(
+            title=canonical,
+            entity_type=canonical_entity.entity_type,
+            chunk_ids=list(all_chunks),
+            description=(
+                f"{canonical}（含别名：{', '.join(t for t in titles if t != canonical)}）"
+                f" 出现于 {len(all_chunks)} 个文本块"
+                if len(titles) > 1
+                else canonical_entity.description
+            ),
+        )
+
+    return merged
+
 # 科研文献中常见的实体模式
 _ENTITY_PATTERNS = [
     # 全大写缩写（如 RAG, LLM, NLP）
@@ -132,6 +202,8 @@ def _extract_entities_rule(
                 description=f"{title} (出现于 {len(set(chunk_ids))} 个文本块)",
             )
 
+    # 第三遍：实体消歧
+    entities = _disambiguate_entities(entities)
     return entities
 
 
@@ -323,8 +395,10 @@ def extract(
         entities = _extract_entities_spacy(
             text_units, config.spacy_model, config.min_entity_freq
         )
+        entities = _disambiguate_entities(entities)
     else:
         entities = _extract_entities_rule(text_units, config.min_entity_freq)
+        # rule 后端已在内部完成消歧，此处无需重复
 
     # 关系抽取（两种后端都使用共现方法）
     relations = _extract_relations_cooccurrence(

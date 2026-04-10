@@ -1,0 +1,32 @@
+[
+  {
+    "question": "What is the key difference between Leiden and Louvain algorithms?",
+    "answer": "The Leiden algorithm introduces a refinement phase that ensures every community is internally connected, which Louvain does not guarantee.",
+    "context_ids": [],
+    "metadata": {"difficulty": "medium", "source": "sample_paper3.txt"}
+  },
+  {
+    "question": "How does structural entropy measure physical boundary violations?",
+    "answer": "Structural entropy uses Shannon entropy over the distribution of source chunk IDs within a community. Higher entropy indicates more physical sources mixed in one community.",
+    "context_ids": [],
+    "metadata": {"difficulty": "hard", "source": "sample_paper.txt"}
+  },
+  {
+    "question": "What is the purpose of lambda annealing in constrained Leiden?",
+    "answer": "Lambda annealing controls the trade-off between physical boundary preservation and semantic coherence. Large lambda at bottom levels enforces physical constraints; decaying lambda at higher levels allows cross-document semantic fusion.",
+    "context_ids": [],
+    "metadata": {"difficulty": "hard", "source": "sample_paper.txt"}
+  },
+  {
+    "question": "What is modularity Q in community detection?",
+    "answer": "Modularity Q measures the fraction of edges within communities minus the expected fraction under a random null model. Higher modularity indicates stronger community structure.",
+    "context_ids": [],
+    "metadata": {"difficulty": "easy", "source": "sample_paper3.txt"}
+  },
+  {
+    "question": "What is U-Retrieval?",
+    "answer": "U-Retrieval combines top-down community navigation with bottom-up physical anchor retrieval to provide both global semantic context and precise local text snippets for a query.",
+    "context_ids": [],
+    "metadata": {"difficulty": "medium", "source": "sample_paper.txt"}
+  }
+]

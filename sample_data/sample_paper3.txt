@@ -1,0 +1,35 @@
+Knowledge Graph Construction and Community Detection
+
+Abstract
+
+Knowledge graphs represent structured information as entities and relationships, enabling machines to reason over complex domains. Community detection algorithms partition graph nodes into cohesive groups, revealing latent structure in large-scale networks.
+
+The Louvain algorithm optimizes modularity through a greedy two-phase process: local node movement and graph aggregation. Despite its efficiency, Louvain suffers from the resolution limit problem, where small communities may be merged into larger ones when the graph is sufficiently dense.
+
+The Leiden algorithm addresses Louvain's connectivity guarantee problem by introducing a refinement phase. After local moving, Leiden refines each community by allowing nodes to form sub-communities, ensuring that every community in the partition is internally connected. This refinement step is the key distinction between Leiden and Louvain.
+
+Modularity Optimization
+
+Modularity Q measures the fraction of edges within communities minus the expected fraction if edges were distributed randomly. A higher modularity indicates a stronger community structure. The formula is:
+
+Q = (1/2m) * sum_ij [A_ij - k_i * k_j / (2m)] * delta(c_i, c_j)
+
+where A_ij is the adjacency matrix, k_i is the degree of node i, m is the total edge weight, and delta is the Kronecker delta function.
+
+Hierarchical Community Detection
+
+Hierarchical methods produce a dendrogram of communities at multiple resolutions. At the finest level, communities correspond to tightly connected cliques. At coarser levels, communities represent broader thematic clusters.
+
+GraphRAG exploits this hierarchy by generating summaries at each level. Global queries benefit from high-level summaries, while specific queries benefit from fine-grained communities. The challenge is selecting the appropriate level for a given query.
+
+Physical Boundary Preservation
+
+In document-based knowledge graphs, entities extracted from the same document share a physical origin. Preserving this physical boundary during community detection ensures that community summaries remain coherent and attributable to specific source documents.
+
+The structural entropy penalty introduced in this work quantifies the degree to which a community violates physical boundaries. Shannon entropy over the distribution of source chunk IDs provides a natural measure of physical diversity within a community.
+
+Lambda Annealing Mechanism
+
+The lambda parameter controls the trade-off between semantic coherence and physical boundary preservation. At the bottom level of the hierarchy, lambda is set to a large value, effectively enforcing hard physical constraints. As the hierarchy ascends, lambda decays according to an annealing schedule, allowing cross-document semantic fusion.
+
+Four annealing schedules are supported: exponential decay, linear decay, cosine annealing, and step decay. Exponential decay is recommended for most use cases due to its rapid initial decay and smooth convergence.

@@ -31,8 +31,11 @@ htmlcov/
 .DS_Store
 
 # 项目运行输出（不提交生成结果）
-output/
 output_run/
+/output/*.csv
+/output/*.parquet
+/output/*.html
+/output/*.txt
 *.parquet
 
 # 日志

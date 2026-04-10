@@ -442,8 +442,11 @@ def _refinement_phase(
         }
         sub_state = _initialize_state(subgraph, sub_physical)
 
-        # 在子图上运行局部移动（单轮）
-        _local_moving_phase(subgraph, sub_state, lambda_val, rng)
+        # 在子图上迭代运行局部移动，直到收敛（最多 5 轮）
+        for _ref_iter in range(5):
+            sub_moved = _local_moving_phase(subgraph, sub_state, lambda_val, rng)
+            if not sub_moved:
+                break
 
         # 检查是否发生了分裂（子图内出现了多个社区）
         sub_communities = set(sub_state.node_to_community.values())
@@ -647,11 +650,9 @@ def hierarchical_leiden_constrained(
             break
 
         # 检查是否所有社区都满足 max_cluster_size 约束
-        # 若满足，且 lambda 已接近 0，则停止
-        max_comm_size = max(
-            len(nodes) for nodes in state.community_to_nodes.values()
-        )
-        if max_comm_size <= max_cluster_size and lambda_val < 1e-6:
+        # 改进：只要 lambda 已足够小（语义约束已释放）就允许停止，
+        # 不再要求社区大小必须满足阈值（避免过早退出）
+        if lambda_val < 1e-6:
             break
 
         # 聚合阶段：构建下一层的超节点图
