@@ -450,35 +450,45 @@ class Evaluator:
         # 初始化累加器
         precision_sum = {k: 0.0 for k in k_values}
         recall_sum = {k: 0.0 for k in k_values}
+        f1_sum = {k: 0.0 for k in k_values}   # 每个查询单独计算 F1 再求均
         ndcg_sum = {k: 0.0 for k in k_values}
         mrr_sum = 0.0
+        valid_n = 0  # 实际参与计算的查询数（排除 context_ids 为空的）
+
+        # 两个版本的 top_down_ids 截断上限：确保检索预算对等
+        # 每个社区最多贡献 1 个 doc_id，总上限 top_k_communities 个
+        TOP_DOWN_PER_COMM = 1   # 每社区贡献的 doc_id 数
+        TOP_DOWN_CAP = 5        # top_down_ids 总上限（与 top_k_communities 一致）
 
         for qa in qa_pairs:
             if not qa.context_ids:
                 continue
+            valid_n += 1
 
             # 执行检索
             result = retriever.retrieve(qa.question)
 
             # 收集检索到的 chunk_id：
-            # 融合策略：交替合并自顶向下（社区）和自底向上（TF-IDF）的结果
-            # 这样社区划分质量会直接影响检索指标
+            # 融合策略：交替合并自顶向下（社区）和自底向上（TF-IDF）的结果。
+            # 两个版本的 top_down_ids 均截断到相同总长度，确保检索预算对等。
             seen_ids: set = set()
             retrieved_ids: List[str] = []
 
             # 自底向上：直接 TF-IDF 命中（精确局部检索）
             bottom_ids = [hit.chunk_id for hit in result.bottom_up_hits]
 
-            # 自顶向下：每个社区贡献其 text_unit_ids（体现社区划分质量）
-            # 每个社区最多贡献 3 个 doc_id，按社区分数排序
+            # 自顶向下：每个社区贡献最多 TOP_DOWN_PER_COMM 个 doc_id，总上限 TOP_DOWN_CAP 个
+            # 两个版本均使用相同的截断规则，确保对等性
             top_down_ids: List[str] = []
             for comm_hit in result.top_down_hits:
                 count = 0
                 for tid in comm_hit.text_unit_ids:
-                    if count >= 3:
+                    if count >= TOP_DOWN_PER_COMM or len(top_down_ids) >= TOP_DOWN_CAP:
                         break
                     top_down_ids.append(tid)
                     count += 1
+                if len(top_down_ids) >= TOP_DOWN_CAP:
+                    break
 
             # 交替合并：bottom_up 优先（精确），top_down 补充（社区覆盖）
             max_len = max(len(bottom_ids), len(top_down_ids))
@@ -494,21 +504,24 @@ class Evaluator:
                         retrieved_ids.append(cid)
                         seen_ids.add(cid)
 
-            # 计算各指标
+            # 计算各指标（每个查询单独计算，再求均）
             mrr_sum += compute_mrr(retrieved_ids, qa.context_ids)
             for k in k_values:
-                precision_sum[k] += compute_precision_at_k(retrieved_ids, qa.context_ids, k)
-                recall_sum[k] += compute_recall_at_k(retrieved_ids, qa.context_ids, k)
+                p_i = compute_precision_at_k(retrieved_ids, qa.context_ids, k)
+                r_i = compute_recall_at_k(retrieved_ids, qa.context_ids, k)
+                f1_i = (2 * p_i * r_i / (p_i + r_i)) if (p_i + r_i) > 0 else 0.0
+                precision_sum[k] += p_i
+                recall_sum[k] += r_i
+                f1_sum[k] += f1_i
                 ndcg_sum[k] += compute_ndcg_at_k(retrieved_ids, qa.context_ids, k)
 
-        n = len(qa_pairs)
+        # 以实际参与计算的查询数为分母（修复无效查询干扰 MRR 的问题）
+        n = valid_n if valid_n > 0 else 1
         metrics.mrr = mrr_sum / n
         for k in k_values:
-            p = precision_sum[k] / n
-            r = recall_sum[k] / n
-            metrics.precision_at_k[k] = p
-            metrics.recall_at_k[k] = r
-            metrics.f1_at_k[k] = (2 * p * r / (p + r)) if (p + r) > 0 else 0.0
+            metrics.precision_at_k[k] = precision_sum[k] / n
+            metrics.recall_at_k[k] = recall_sum[k] / n
+            metrics.f1_at_k[k] = f1_sum[k] / n   # 先对每个查询计算 F1，再求均
             metrics.ndcg_at_k[k] = ndcg_sum[k] / n
 
         return metrics
