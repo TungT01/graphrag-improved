@@ -460,8 +460,39 @@ class Evaluator:
             # 执行检索
             result = retriever.retrieve(qa.question)
 
-            # 收集检索到的 chunk_id（自底向上命中）
-            retrieved_ids = [hit.chunk_id for hit in result.bottom_up_hits]
+            # 收集检索到的 chunk_id：
+            # 融合策略：交替合并自顶向下（社区）和自底向上（TF-IDF）的结果
+            # 这样社区划分质量会直接影响检索指标
+            seen_ids: set = set()
+            retrieved_ids: List[str] = []
+
+            # 自底向上：直接 TF-IDF 命中（精确局部检索）
+            bottom_ids = [hit.chunk_id for hit in result.bottom_up_hits]
+
+            # 自顶向下：每个社区贡献其 text_unit_ids（体现社区划分质量）
+            # 每个社区最多贡献 3 个 doc_id，按社区分数排序
+            top_down_ids: List[str] = []
+            for comm_hit in result.top_down_hits:
+                count = 0
+                for tid in comm_hit.text_unit_ids:
+                    if count >= 3:
+                        break
+                    top_down_ids.append(tid)
+                    count += 1
+
+            # 交替合并：bottom_up 优先（精确），top_down 补充（社区覆盖）
+            max_len = max(len(bottom_ids), len(top_down_ids))
+            for i in range(max_len):
+                if i < len(bottom_ids):
+                    cid = bottom_ids[i]
+                    if cid not in seen_ids:
+                        retrieved_ids.append(cid)
+                        seen_ids.add(cid)
+                if i < len(top_down_ids):
+                    cid = top_down_ids[i]
+                    if cid not in seen_ids:
+                        retrieved_ids.append(cid)
+                        seen_ids.add(cid)
 
             # 计算各指标
             mrr_sum += compute_mrr(retrieved_ids, qa.context_ids)

@@ -213,36 +213,44 @@ def _extract_relations_cooccurrence(
     window: int = 3,
 ) -> List[Relation]:
     """
-    基于共现窗口构建实体关系。
+    基于共现窗口构建实体关系（倒排索引优化版）。
 
-    在同一个 chunk 内，若两个实体在 window 句以内共现，
-    则建立关系，权重为共现次数。
+    策略：先在 chunk 级别过滤出现的实体子集，再在句子窗口内做共现统计，
+    避免 O(|entities| × |sentences|) 的暴力遍历。
 
     Parameters
     ----------
     window : int
         共现窗口大小（句子数）
     """
-    entity_titles = set(entities.keys())
+    entity_titles = list(entities.keys())
+    if not entity_titles:
+        return []
+
+    # 按长度降序排列，优先匹配更长的实体名（避免短名遮蔽长名）
+    entity_titles_sorted = sorted(entity_titles, key=len, reverse=True)
+
     cooccurrence: Dict[Tuple[str, str], int] = defaultdict(int)
 
     for unit in text_units:
+        # 先过滤出在整个 chunk 中出现的实体（大幅减少后续逐句匹配的候选集）
+        chunk_text = unit.text
+        chunk_entities = [t for t in entity_titles_sorted if t in chunk_text]
+
+        if len(chunk_entities) < 2:
+            continue
+
         # 将 chunk 分句
-        sentences = re.split(r"(?<=[.!?])\s+|\n", unit.text)
+        sentences = re.split(r"(?<=[.!?])\s+|\n", chunk_text)
         sentences = [s.strip() for s in sentences if s.strip()]
+        if not sentences:
+            continue
 
-        # 在窗口内查找共现实体对
-        for i, sent in enumerate(sentences):
-            window_sents = sentences[i: i + window]
-            window_text = " ".join(window_sents)
+        # 逐句窗口统计共现
+        for i in range(len(sentences)):
+            window_text = " ".join(sentences[i: i + window])
+            present: List[str] = [t for t in chunk_entities if t in window_text]
 
-            # 找出窗口内出现的所有实体
-            present: List[str] = []
-            for title in entity_titles:
-                if title in window_text:
-                    present.append(title)
-
-            # 两两建立共现关系
             for j in range(len(present)):
                 for k in range(j + 1, len(present)):
                     a, b = sorted([present[j], present[k]])

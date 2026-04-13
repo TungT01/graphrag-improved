@@ -76,6 +76,7 @@ class ExperimentConfig:
     top_k_communities: int = 5
     top_k_chunks: int = 5
     alpha: float = 0.5                 # U-Retrieval 融合比例
+    min_entity_freq: int = 5           # 实体最低出现频次（过滤噪声）
 
 
 @dataclass
@@ -162,15 +163,17 @@ def run_single_experiment(
     # Step 1: 实体与关系抽取（两个版本共享同一份抽取结果）
     # ------------------------------------------------------------------
     if verbose:
-        print("  [1/3] 实体抽取...")
+        print(f"  [1/3] 实体抽取（{len(text_units)} 篇文章）...")
+        t1 = time.time()
     extraction_config = ExtractionConfig(
         backend="rule",
-        min_entity_freq=1,
+        min_entity_freq=exp_config.min_entity_freq,
         cooccurrence_window=3,
     )
     entities_df, relationships_df = extract(text_units, extraction_config)
     if verbose:
-        print(f"        实体 {len(entities_df)} 个，关系 {len(relationships_df)} 条")
+        print(f"        实体 {len(entities_df)} 个，关系 {len(relationships_df)} 条  "
+              f"({time.time()-t1:.1f}s)")
 
     # ------------------------------------------------------------------
     # Step 2: 社区检测（唯一变量：λ）

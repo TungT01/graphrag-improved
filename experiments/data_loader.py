@@ -58,10 +58,10 @@ class MultiHopDataset:
     def __post_init__(self):
         # 构建标题 → 文档的索引（用于 supporting_evidence 解析）
         self.title_to_doc = {doc.title: doc for doc in self.corpus}
-        # 填充 supporting_doc_ids
+        # 填充 supporting_doc_ids（doc_id 即 title）
         for qa in self.qa_pairs:
             qa.supporting_doc_ids = [
-                self.title_to_doc[t].doc_id
+                t  # doc_id == title
                 for t in qa.supporting_titles
                 if t in self.title_to_doc
             ]
@@ -99,9 +99,10 @@ def _load_corpus(corpus_path: str) -> List[CorpusDoc]:
     for i, item in enumerate(raw):
         body = item.get("body") or item.get("text") or item.get("content") or ""
         title = item.get("title") or item.get("name") or f"doc_{i}"
-        doc_id = item.get("id") or f"doc_{i:06d}"
+        # 用 title 作为 doc_id（因为 QA 的 evidence_list 通过 title 关联）
+        doc_id = str(title)
         docs.append(CorpusDoc(
-            doc_id=str(doc_id),
+            doc_id=doc_id,
             title=str(title),
             body=str(body),
             source=str(item.get("source", "")),
@@ -117,21 +118,36 @@ def _load_qa(qa_path: str) -> List[QAPair]:
 
     qa_pairs = []
     for item in raw:
-        # supporting_evidence 字段名可能有变体
-        evidence = (
-            item.get("supporting_evidence")
+        # 真实字段名为 evidence_list，每条是含 title 的 dict
+        evidence_raw = (
+            item.get("evidence_list")
+            or item.get("supporting_evidence")
             or item.get("required_evidence")
             or item.get("evidence")
             or []
         )
-        if isinstance(evidence, str):
-            evidence = [evidence]
+        # 兼容两种格式：字符串列表 或 dict 列表（含 title 字段）
+        if isinstance(evidence_raw, str):
+            import ast
+            try:
+                evidence_raw = ast.literal_eval(evidence_raw)
+            except Exception:
+                evidence_raw = []
+
+        supporting_titles = []
+        for ev in evidence_raw:
+            if isinstance(ev, dict):
+                t = ev.get("title", "")
+                if t:
+                    supporting_titles.append(str(t))
+            elif isinstance(ev, str):
+                supporting_titles.append(ev)
 
         qa_pairs.append(QAPair(
             query=str(item.get("query", "")),
             answer=str(item.get("answer", "")),
             question_type=str(item.get("question_type", "unknown")),
-            supporting_titles=list(evidence),
+            supporting_titles=supporting_titles,
         ))
     return qa_pairs
 

@@ -505,6 +505,14 @@ class URetriever:
         """
         # 执行双轨检索
         top_down_hits = self._top_down.retrieve(query)
+
+        # 将 top-down 社区的实体列表作为 entity_mentions 传给 bottom-up
+        # 这样社区划分质量会影响 bottom-up 检索的物理锚点加权
+        if entity_mentions is None:
+            entity_mentions = []
+            for comm_hit in top_down_hits[:3]:  # 只取前 3 个社区的实体
+                entity_mentions.extend(comm_hit.entity_ids[:5])  # 每个社区最多 5 个实体
+
         bottom_up_hits = self._bottom_up.retrieve(query, entity_mentions)
 
         # 融合上下文
