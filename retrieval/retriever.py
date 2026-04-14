@@ -1,21 +1,25 @@
 """
 retrieval/retriever.py
 ----------------------
-U-Retrieval 双轨检索模块。
+U-Retrieval 双轨检索模块（v3：适配物理优先架构）。
 
-论文中提出的 U-Retrieval 结合两条检索路径：
+v3 变更：
+  - 自底向上检索的物理锚点从 chunk_id（段落级）升级为 sent_id（句子级）
+  - 社区的 doc_ids 列用于高层检索时的文档级定位
+  - 检索结果携带完整物理路径（sent_id → para_id → doc_id），支持精确溯源
+  - entity_chunks 索引改为 node_id → sent_id 映射
+
+U-Retrieval 双轨检索路径：
   1. 自顶向下（Top-Down）：从最高层社区出发，逐层向下导航，
-     找到与查询最相关的社区，获取社区摘要作为全局上下文。
-  2. 自底向上（Bottom-Up）：通过物理锚点（chunk_id）直接定位
-     原始文本块，获取精确的局部上下文。
-
-两条路径的结果融合后，提供给下游 LLM 生成最终答案。
+     找到与查询最相关的社区，通过社区的 doc_ids 定位原始文档。
+  2. 自底向上（Bottom-Up）：通过实体的 sent_id 直接定位原始句子，
+     获取精确的局部上下文，补充自顶向下的全局视角。
 
 当前实现：
   - 基于 TF-IDF 的轻量级相似度计算（无需向量数据库）
   - 社区层次导航（Top-Down）
-  - 物理锚点精确检索（Bottom-Up）
-  - 结果融合与去重
+  - 句子级物理锚点精确检索（Bottom-Up）
+  - 结果融合与去重（doc_id 级别去重，避免同文档重复）
   - 可选：BM25 后端（需安装 rank_bm25）
 """
 
@@ -62,18 +66,21 @@ class CommunityHit:
     title: str
     score: float
     entity_ids: List[str] = field(default_factory=list)
-    text_unit_ids: List[str] = field(default_factory=list)
+    text_unit_ids: List[str] = field(default_factory=list)   # sent_id 列表
+    doc_ids: List[str] = field(default_factory=list)          # v3 新增：文档 ID 列表
     structural_entropy: float = 0.0
     summary: str = ""          # 社区摘要（若有 LLM 生成）
 
 
 @dataclass
 class TextUnitHit:
-    """自底向上检索命中的文本块。"""
-    chunk_id: str
+    """自底向上检索命中的文本块（v3：精确到句子或段落级）。"""
+    chunk_id: str          # sent_id 或 para_id（取决于检索粒度）
     text: str
     score: float
     doc_title: str = ""
+    doc_id: str = ""       # v3 新增：文档 ID（用于评估时的 ground-truth 对齐）
+    sent_id: str = ""      # v3 新增：句子 ID（精确物理坐标）
     entity_mentions: List[str] = field(default_factory=list)
 
 
@@ -287,6 +294,11 @@ class TopDownRetriever:
                 if not isinstance(text_unit_ids, list):
                     text_unit_ids = []
 
+                # v3：获取 doc_ids（文档级定位）
+                doc_ids = row.get("doc_ids", [])
+                if not isinstance(doc_ids, list):
+                    doc_ids = []
+
                 hits.append(CommunityHit(
                     community_id=comm_id,
                     level=level,
@@ -294,6 +306,7 @@ class TopDownRetriever:
                     score=score,
                     entity_ids=entity_ids,
                     text_unit_ids=text_unit_ids,
+                    doc_ids=doc_ids,
                     structural_entropy=float(row.get("structural_entropy", 0.0)),
                     summary=str(row.get("summary", "")),
                 ))
@@ -309,17 +322,23 @@ class TopDownRetriever:
 
 class BottomUpRetriever:
     """
-    自底向上物理锚点检索器。
+    自底向上物理锚点检索器（v3：句子级精确定位）。
 
-    通过实体的 chunk_id 直接定位原始文本块，
+    通过实体的 sent_id 直接定位原始句子/段落，
     提供精确的局部上下文，补充自顶向下检索的全局视角。
+
+    v3 变更：
+      - text_units 可以是句子级（sent_id）或段落级（para_id）
+      - entity_chunks 索引改为 node_id → sent_id 映射
+      - 检索结果携带 doc_id，支持评估时的 ground-truth 对齐
 
     Parameters
     ----------
     text_units : List[dict]
-        文本块列表，每个元素包含 chunk_id, text, doc_title 等字段
+        文本块列表，每个元素包含 chunk_id, text, doc_title, doc_id 等字段
+        v3 中 chunk_id 优先为 sent_id（句子级），也兼容 para_id（段落级）
     entities_df : pd.DataFrame
-        实体表，包含 title, text_unit_ids 列
+        实体表，包含 id（node_id）, sent_id, text_unit_ids 列
     top_k : int
         返回的最大文本块数，默认 5
     """
@@ -340,18 +359,33 @@ class BottomUpRetriever:
             if "chunk_id" in unit
         }
 
-        # 构建实体 title → chunk_ids 的索引
-        self._entity_chunks: Dict[str, Set[str]] = {}
-        if not entities_df.empty and "title" in entities_df.columns:
+        # 构建实体索引：node_id → sent_id，title → sent_id 集合
+        # v3：优先使用 sent_id（精确句子级锚点）
+        self._entity_chunks: Dict[str, Set[str]] = {}   # title → chunk_id 集合
+        self._node_to_sent: Dict[str, str] = {}          # node_id → sent_id
+        if not entities_df.empty:
             for _, row in entities_df.iterrows():
-                title = str(row["title"])
-                raw = row.get("text_unit_ids", [])
-                if isinstance(raw, list):
-                    self._entity_chunks[title] = set(str(x) for x in raw)
-                elif isinstance(raw, str):
-                    self._entity_chunks[title] = {
-                        x.strip() for x in raw.split(";") if x.strip()
-                    }
+                # node_id → sent_id 映射
+                node_id = str(row.get("id", ""))
+                sent_id = str(row.get("sent_id", "") or row.get("primary_chunk_id", ""))
+                if node_id and sent_id:
+                    self._node_to_sent[node_id] = sent_id
+
+                # title → chunk_id 集合（兼容旧检索逻辑）
+                if "title" in entities_df.columns:
+                    title = str(row["title"])
+                    # 优先使用 sent_id
+                    if sent_id:
+                        self._entity_chunks.setdefault(title, set()).add(sent_id)
+                    # 兼容旧格式
+                    raw = row.get("text_unit_ids", [])
+                    if isinstance(raw, list):
+                        for x in raw:
+                            self._entity_chunks.setdefault(title, set()).add(str(x))
+                    elif isinstance(raw, str):
+                        for x in raw.split(";"):
+                            if x.strip():
+                                self._entity_chunks.setdefault(title, set()).add(x.strip())
 
         # 构建文本块的 TF-IDF 索引
         docs = [unit.get("text", "") for unit in text_units]
@@ -425,6 +459,8 @@ class BottomUpRetriever:
                 text=unit.get("text", ""),
                 score=score,
                 doc_title=unit.get("doc_title", ""),
+                doc_id=unit.get("doc_id", ""),       # v3 新增
+                sent_id=unit.get("sent_id", chunk_id),  # v3 新增
                 entity_mentions=mentions_in_chunk[:10],
             ))
 

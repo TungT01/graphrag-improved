@@ -99,36 +99,72 @@ class ExperimentResult:
 def corpus_to_pipeline_text_units(dataset: MultiHopDataset) -> List[TextUnit]:
     """
     将 MultiHop-RAG corpus 转换为 Pipeline 所需的 TextUnit 列表。
-    每篇文章 = 一个 TextUnit，doc_id 作为 chunk_id，保证物理锚点可追踪。
+
+    v3 变更：
+        每篇文章先切分为段落，再用 spaCy 切分为句子，
+        生成三级 ID 结构：
+          doc_id  = doc.doc_id（文章标题，与 MultiHop-RAG 的 evidence 对齐）
+          para_id = {doc_id}-p{para_idx:03d}
+          sent_id = {para_id}-s{sent_idx:03d}
     """
-    import hashlib
+    from ..data.ingestion import Document, document_to_text_units, SentenceUnit
+    from ..data.ingestion import _make_para_id, _make_sent_id
     units = []
     for doc in dataset.corpus:
-        units.append(TextUnit(
-            chunk_id=doc.doc_id,
-            text=doc.body,
+        document = Document(
             doc_id=doc.doc_id,
-            doc_title=doc.title,
-            chunk_index=0,
-            metadata={
-                "source": doc.source,
-                "published_at": doc.published_at,
-            },
-        ))
+            title=doc.title,
+            raw_text=doc.body,
+            source_path=f"multihop_rag/{doc.doc_id}",
+        )
+        try:
+            doc_units = document_to_text_units(
+                document,
+                spacy_model="en_core_web_sm",
+                use_spacy_sentences=True,
+            )
+        except Exception:
+            # spaCy 不可用时降级为单一 TextUnit
+            para_id = _make_para_id(doc.doc_id, 0)
+            sent_id = _make_sent_id(para_id, 0)
+            doc_units = [TextUnit(
+                chunk_id=para_id,
+                text=doc.body,
+                doc_id=doc.doc_id,
+                doc_title=doc.title,
+                chunk_index=0,
+                sentences=[SentenceUnit(
+                    sent_id=sent_id,
+                    text=doc.body[:500],
+                    doc_id=doc.doc_id,
+                    para_id=para_id,
+                    sent_index=0,
+                    para_index=0,
+                )],
+                metadata={"source": doc.source},
+            )]
+        units.extend(doc_units)
     return units
 
 
 def dataset_qa_to_eval_qa(dataset: MultiHopDataset) -> List[EvalQAPair]:
-    """将 MultiHopDataset 的 QA 对转换为评估框架所需的 EvalQAPair 格式。"""
+    """
+    将 MultiHopDataset 的 QA 对转换为评估框架所需的 EvalQAPair 格式。
+
+    v3 说明：
+        context_ids 使用 doc_id（文章标题）作为 ground-truth。
+        MultiHop-RAG 的 supporting_evidence 是文章级的，评估时
+        将检索结果中的 doc_id 与此对齐。
+    """
     return [
         EvalQAPair(
             question=qa.query,
             answer=qa.answer,
-            context_ids=qa.supporting_doc_ids,  # ground-truth doc_id 列表
+            context_ids=qa.supporting_doc_ids,  # ground-truth doc_id 列表（文章标题）
             metadata={"question_type": qa.question_type},
         )
         for qa in dataset.qa_pairs
-        if qa.supporting_doc_ids  # 过滤掉无法解析 supporting evidence 的条目
+        if qa.supporting_doc_ids
     ]
 
 
@@ -267,6 +303,8 @@ def run_comparison(
             print(f"  使用 {dataset.num_qa} 条 QA 对（随机采样，seed=42）")
 
     text_units = corpus_to_pipeline_text_units(dataset)
+    # v3：检索用的 text_units 使用文章级粒度（每篇文章一个单元）
+    # 评估时的 ground-truth 是 doc_id（文章标题），与此对齐
     retrieval_text_units = corpus_to_text_units(dataset.corpus)
     eval_qa_pairs = dataset_qa_to_eval_qa(dataset)
 
