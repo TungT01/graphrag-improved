@@ -106,6 +106,79 @@ def build_graph_from_graphrag(
     return G
 
 
+def build_intra_doc_entity_edges(
+    entities: pd.DataFrame,
+    weight: float = 0.5,
+) -> List[Tuple[str, str, float]]:
+    """
+    路径A：文档内实体消解边（Intra-Document Entity Merging）。
+
+    为同一文档内出现的同名实体（不同句子里的实例节点）之间添加软连接边。
+    这些边权重较低（默认 0.5），不覆盖语义边，只起到"桥接"作用，
+    让 Leiden 能够发现跨句子的同名实体聚类。
+
+    设计原则：
+    - 只在同一文档（doc_id 相同）内连接，不跨文档
+    - 权重 < 1.0，低于语义边，避免过度合并
+    - 相邻实例节点之间连边（链式连接），避免 O(n²) 爆炸
+    - 过滤噪声实体名（长度 < 3 或在停用词表中）
+
+    Parameters
+    ----------
+    entities : pd.DataFrame
+        必须包含列：id（node_id）, title（实体名）, doc_id
+    weight : float
+        跨句子同名实体边的权重，默认 0.5
+
+    Returns
+    -------
+    List[Tuple[str, str, float]]
+        [(source_node_id, target_node_id, weight), ...]
+    """
+    if "title" not in entities.columns or "doc_id" not in entities.columns:
+        return []
+
+    # 噪声实体名过滤（与 extractor.py 中的 _STOPWORDS 保持一致）
+    _NOISE_TITLES = {
+        "which", "there", "There", "one", "the company", "available",
+        "a lot", "people", "able", "good", "more", "something", "some",
+        "get", "make", "use", "take", "have", "be", "do", "go",
+        "it", "this", "that", "these", "those", "they", "we",
+        "he", "she", "who", "what", "where", "when", "how",
+        "the ball", "the game", "the team", "the player",
+    }
+
+    # 按 (doc_id, title_lower) 分组，收集同文档同名实体的 node_id 列表
+    from collections import defaultdict
+    doc_title_to_nodes: Dict[str, List[str]] = defaultdict(list)
+
+    for _, row in entities.iterrows():
+        title = str(row.get("title", "")).strip()
+        doc_id = str(row.get("doc_id", "")).strip()
+        node_id = str(row["id"])
+
+        # 过滤噪声
+        if len(title) < 3:
+            continue
+        if title in _NOISE_TITLES:
+            continue
+        if title.lower() in _NOISE_TITLES:
+            continue
+
+        key = f"{doc_id}|||{title.lower()}"
+        doc_title_to_nodes[key].append(node_id)
+
+    # 链式连接：node[0]-node[1]-node[2]-...（避免 O(n²)）
+    edges: List[Tuple[str, str, float]] = []
+    for key, nodes in doc_title_to_nodes.items():
+        if len(nodes) < 2:
+            continue
+        for i in range(len(nodes) - 1):
+            edges.append((nodes[i], nodes[i + 1], weight))
+
+    return edges
+
+
 def build_physical_nodes_from_graphrag(
     entities: pd.DataFrame,
 ) -> Dict[str, PhysicalNode]:
@@ -320,6 +393,8 @@ def run_constrained_community_detection(
     seed: int = 42,
     use_lcc: bool = True,
     min_edge_weight: float = 1.0,
+    intra_doc_merging: bool = False,
+    intra_doc_edge_weight: float = 0.5,
 ) -> pd.DataFrame:
     """
     带结构熵惩罚的社区检测主函数。
@@ -328,6 +403,10 @@ def run_constrained_community_detection(
         - 图节点是实体实例（node_id 含物理路径），不是实体概念
         - 物理锚点精确到句子级（sent_id）
         - min_edge_weight 默认降为 1.0（v2 架构边更稀疏，不需要高阈值过滤）
+
+    v4 新增（路径A）：
+        - intra_doc_merging：为同一文档内的同名实体加跨句子软连接边，
+          解决 v3 图碎片化问题，让 Leiden 能发现文档级语义聚类。
 
     Parameters
     ----------
@@ -347,6 +426,10 @@ def run_constrained_community_detection(
         是否仅对最大连通分量运行聚类，默认 True
     min_edge_weight : float
         最小边权重阈值，默认 1.0
+    intra_doc_merging : bool
+        路径A：是否注入文档内同名实体跨句子边，默认 False（保持向后兼容）
+    intra_doc_edge_weight : float
+        文档内实体消解边的权重，默认 0.5（低于语义边，避免过度合并）
 
     Returns
     -------
@@ -368,6 +451,17 @@ def run_constrained_community_detection(
 
     # 构建图和物理节点
     graph = build_graph_from_graphrag(entities, relationships)
+
+    # 路径A：注入文档内同名实体跨句子软连接边
+    if intra_doc_merging:
+        extra_edges = build_intra_doc_entity_edges(entities, weight=intra_doc_edge_weight)
+        for src, tgt, w in extra_edges:
+            if src in graph and tgt in graph:
+                if graph.has_edge(src, tgt):
+                    graph[src][tgt]["weight"] += w
+                else:
+                    graph.add_edge(src, tgt, weight=w)
+
     physical_nodes = build_physical_nodes_from_graphrag(entities)
 
     if graph.number_of_nodes() == 0:

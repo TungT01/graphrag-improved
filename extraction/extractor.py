@@ -110,16 +110,41 @@ _SUBJECT_DEPS = {"nsubj", "nsubjpass", "csubj", "csubjpass", "agent", "expl"}
 _OBJECT_DEPS = {"dobj", "pobj", "iobj", "attr", "xcomp", "acomp", "oprd"}
 
 # 停用词（避免将普通词误识别为实体）
+# 路径B：扩充噪声实体过滤，覆盖诊断发现的高频误识别词
 _STOPWORDS = {
+    # 代词 / 指示词
     "the", "a", "an", "this", "that", "these", "those", "it", "its",
     "we", "our", "they", "their", "he", "she", "his", "her",
     "i", "me", "my", "you", "your", "us",
+    "which", "who", "what", "where", "when", "how", "there", "here",
+    # 数量词 / 模糊名词
+    "one", "two", "three", "some", "many", "much", "more", "most",
+    "few", "several", "all", "both", "each", "every", "any",
+    "something", "anything", "nothing", "everything",
+    "someone", "anyone", "everyone", "nobody",
+    "a lot", "a bit", "a few", "a number",
+    # 形容词误识别
+    "available", "able", "good", "bad", "new", "old", "big", "small",
+    "large", "great", "high", "low", "long", "short", "right", "wrong",
+    "important", "different", "similar", "possible", "likely",
+    # 动词误识别
+    "get", "make", "use", "take", "have", "be", "do", "go", "come",
+    "say", "know", "think", "see", "look", "want", "give", "find",
+    "tell", "ask", "seem", "feel", "try", "leave", "call", "keep",
+    # 介词 / 连词
     "in", "on", "at", "to", "for", "of", "with", "by", "from",
     "is", "are", "was", "were", "be", "been", "being",
     "have", "has", "had", "do", "does", "did",
     "will", "would", "could", "should", "may", "might",
     "also", "however", "therefore", "thus", "hence",
+    # 文档结构词
     "figure", "table", "section", "chapter",
+    # 通用泛指名词（诊断发现的高频噪声）
+    "people", "person", "thing", "things", "way", "time", "year",
+    "day", "week", "month", "part", "place", "point", "case",
+    "fact", "reason", "result", "example", "number", "amount",
+    "the company", "the team", "the game", "the ball", "the player",
+    "the world", "the country", "the city", "the government",
 }
 
 
