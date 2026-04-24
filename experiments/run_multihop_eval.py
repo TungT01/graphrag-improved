@@ -415,29 +415,36 @@ def run_experiment(
     print(f"  文章数：{dataset.num_docs}，QA 对：{dataset.num_qa}（有效：{len(eval_qa)}）")
     print(f"  问题类型：{type_counts}")
 
-    # ── 2. 构建 TextUnit（全量 corpus）──────────────────────────
+    # ── 2. 构建 TextUnit（只处理 QA 涉及的文章）──────────────────
     cache_dir = Path(output_dir) / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    print("\n[2/6] 构建 TextUnit（全量 corpus）...")
+    # 收集所有 QA 涉及的 doc_id，只处理相关文章（大幅减少抽取量）
+    relevant_doc_ids: set = set()
+    for qa in dataset.qa_pairs:
+        relevant_doc_ids.update(qa.supporting_doc_ids)
+    # 也加入 corpus 中所有文章（检索时需要全量），但抽取只用相关文章
+    print(f"\n[2/6] 构建 TextUnit（相关文章 {len(relevant_doc_ids)}/{dataset.num_docs} 篇）...")
     text_units = build_pipeline_text_units(
-        dataset, relevant_doc_ids=None, verbose=verbose, use_regex=use_regex
+        dataset, relevant_doc_ids=relevant_doc_ids if relevant_doc_ids else None,
+        verbose=verbose, use_regex=use_regex
     )
     retrieval_units = corpus_to_text_units(dataset.corpus)
 
     # ── 3. 实体抽取 A/B 两份（带缓存）──────────────────────────
+    cache_tag = f"n{n_qa}" if n_qa else "full"
     # 原始抽取（用于 Baseline / Ours / Ours+A）
     print("\n[3/6] 实体抽取（原始，用于 Baseline/Ours/Ours+A）...")
     entities_orig, rels_orig = _load_or_extract(
-        text_units, cache_dir, "full", verbose=verbose
+        text_units, cache_dir, cache_tag, verbose=verbose
     )
 
     # 路径B 抽取（噪声过滤后，用于 Ours+A+B）
     # 路径B 的改动在 extractor.py 的 _STOPWORDS 中，需要清除旧缓存才能生效
-    # 用 "full_b" 作为独立缓存 tag
+    # 用 "_b" 后缀作为独立缓存 tag
     print("\n[4/6] 实体抽取（路径B噪声过滤，用于 Ours+A+B）...")
     entities_b, rels_b = _load_or_extract(
-        text_units, cache_dir, "full_b", verbose=verbose
+        text_units, cache_dir, f"{cache_tag}_b", verbose=verbose
     )
 
     if len(entities_orig) == 0:

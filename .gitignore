@@ -44,3 +44,14 @@ output_run/
 # 环境变量
 .env
 .env.*
+
+# GraphRAG 官方工作区缓存（体积大，不提交）
+baselines/graphrag_official/graphrag_workspace/cache/
+baselines/graphrag_official/graphrag_workspace/output/
+baselines/graphrag_official/graphrag_workspace/logs/
+
+# 实验抽取缓存（parquet 已由 *.parquet 规则覆盖）
+experiments/results/cache/
+
+# 虚拟环境（带版本号的）
+.venv-*/

@@ -76,7 +76,7 @@ class ExperimentConfig:
     top_k_communities: int = 5
     top_k_chunks: int = 5
     alpha: float = 0.5                 # U-Retrieval 融合比例
-    min_entity_freq: int = 5           # 实体最低出现频次（过滤噪声）
+    min_entity_freq: int = 1           # v3：实体实例节点，每个只出现一次，不做频次过滤
 
 
 @dataclass
@@ -202,9 +202,9 @@ def run_single_experiment(
         print(f"  [1/3] 实体抽取（{len(text_units)} 篇文章）...")
         t1 = time.time()
     extraction_config = ExtractionConfig(
-        backend="rule",
+        backend="spacy",
+        spacy_model="en_core_web_sm",
         min_entity_freq=exp_config.min_entity_freq,
-        cooccurrence_window=3,
     )
     entities_df, relationships_df = extract(text_units, extraction_config)
     if verbose:
